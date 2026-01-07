@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OGG 转 MP3 工具</title>
+    <!-- 引入本地 ffmpeg 库 -->
+    <script src="ffmpeg.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 500px; text-align: center; }
+        h1 { color: #333; margin-bottom: 1rem; }
+        
+        .upload-box { border: 2px dashed #ccc; padding: 2rem; border-radius: 8px; cursor: pointer; margin-bottom: 1.5rem; display: block; transition: 0.3s; }
+        .upload-box:hover { border-color: #007bff; background-color: #f8f9fa; }
+        
+        .btn { background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 16px; cursor: pointer; transition: 0.3s; }
+        .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+        .btn:hover:not(:disabled) { background-color: #0056b3; }
+        
+        #status { margin-top: 15px; font-size: 14px; color: #666; min-height: 20px; }
+        
+        /* 进度条样式 */
+        .progress-container {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 8px;
+            margin-top: 20px;
+            height: 20px;
+            display: none; /* 默认隐藏 */
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background-color: #28a745;
+            transition: width 0.2s ease;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            font-size: 12px;
+        }
+
+        #download-area { margin-top: 20px; display: none; }
+        .download-link { display: inline-block; text-decoration: none; background-color: #28a745; color: white; padding: 10px 20px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>OGG 转 MP3 工具</h1>
+    
+    <label class="upload-box">
+        <span id="file-name">点击选择 OGG 文件</span>
+        <input type="file" id="file-upload" accept=".ogg" style="display:none">
+    </label>
+
+    <button id="convert-btn" class="btn" disabled>开始转换</button>
+
+    <!-- 进度条区域 -->
+    <div class="progress-container" id="progress-container">
+        <div class="progress-bar" id="progress-bar">0%</div>
+    </div>
+
+    <div id="status">正在初始化组件...</div>
+
+    <div id="download-area">
+        <a id="download-link" class="download-link" download>下载 MP3</a>
+    </div>
+</div>
+
+<script>
+    const { createFFmpeg, fetchFile } = FFmpeg;
+    
+    // 关键配置：指向本地文件
+    const ffmpeg = createFFmpeg({ 
+        log: false, //以此关闭大量日志，提升少许性能
+        corePath: 'ffmpeg-core.js' 
+    });
+
+    const fileInput = document.getElementById('file-upload');
+    const fileNameSpan = document.getElementById('file-name');
+    const convertBtn = document.getElementById('convert-btn');
+    const statusText = document.getElementById('status');
+    const downloadArea = document.getElementById('download-area');
+    const downloadLink = document.getElementById('download-link');
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+
+    const loadFFmpeg = async () => {
+        try {
+            // 绑定进度回调函数
+            ffmpeg.setProgress(({ ratio }) => {
+                // ratio 是 0 到 1 之间的小数
+                if (ratio >= 0 && ratio <= 1) {
+                    const percent = (ratio * 100).toFixed(1) + '%';
+                    progressBar.style.width = percent;
+                    progressBar.innerText = percent;
+                }
+            });
+
+            await ffmpeg.load();
+            statusText.innerText = '组件就绪，请选择文件。';
+        } catch (e) {
+            console.error(e);
+            statusText.innerText = '加载失败，请检查是否缺少 ffmpeg-core.worker.js 文件';
+        }
+    };
+
+    loadFFmpeg();
+
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            fileNameSpan.innerText = file.name;
+            if (ffmpeg.isLoaded()) {
+                convertBtn.disabled = false;
+                statusText.innerText = '准备就绪';
+            }
+            downloadArea.style.display = 'none';
+            progressContainer.style.display = 'none';
+        }
+    });
+
+    convertBtn.addEventListener('click', async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        convertBtn.disabled = true;
+        statusText.innerText = '正在转换...';
+        progressContainer.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressBar.innerText = '0%';
+        downloadArea.style.display = 'none';
+
+        try {
+            const inputName = 'input.ogg';
+            const outputName = 'output.mp3';
+
+            ffmpeg.FS('writeFile', inputName, await fetchFile(file));
+
+            /**
+             * 核心命令解释：
+             * -i input.ogg       : 输入
+             * -map_metadata 0    : 将输入文件的全局元数据(标题/歌手等)复制到输出
+             * -id3v2_version 3   : 指定写入 ID3v2.3 标签 (Windows兼容性最好)
+             * -b:a 192k          : 比特率
+             * output.mp3         : 输出
+             */
+            await ffmpeg.run(
+                '-i', inputName, 
+                '-map_metadata', '0', 
+                '-id3v2_version', '3', 
+                '-b:a', '192k', 
+                outputName
+            );
+
+            const data = ffmpeg.FS('readFile', outputName);
+            const blob = new Blob([data.buffer], { type: 'audio/mp3' });
+            const url = URL.createObjectURL(blob);
+
+            downloadLink.href = url;
+            downloadLink.download = file.name.replace(/\.[^/.]+$/, "") + ".mp3";
+            
+            downloadArea.style.display = 'block';
+            statusText.innerText = '转换成功！';
+            
+            // 设置进度条为 100% (防止因为计算误差没跑满)
+            progressBar.style.width = '100%';
+            progressBar.innerText = '100%';
+
+            ffmpeg.FS('unlink', inputName);
+            ffmpeg.FS('unlink', outputName);
+
+        } catch (error) {
+            console.error(error);
+            statusText.innerText = '转换出错，请按 F12 查看控制台';
+        } finally {
+            convertBtn.disabled = false;
+        }
+    });
+</script>
+
+</body>
+</html>
